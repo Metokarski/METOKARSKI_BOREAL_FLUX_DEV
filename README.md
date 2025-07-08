@@ -12,7 +12,7 @@ Make sure you have Python 3 installed on your computer.
 ### 2. Clone the Code
 Open your terminal and run this command to download the project:
 ```bash
-git clone https://github.com/Metokarski/METOKARSKI_BOREAL_FLUX_DEV.git
+git clone --recurse-submodules https://github.com/Metokarski/METOKARSKI_BOREAL_FLUX_DEV.git
 cd METOKARSKI_BOREAL_FLUX_DEV
 ```
 
