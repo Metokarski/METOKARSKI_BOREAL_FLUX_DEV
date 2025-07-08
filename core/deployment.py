@@ -3,8 +3,11 @@ import json
 import time
 import paramiko
 import requests
+import subprocess
+from core.logger import get_logger
 from lambdalabs_api.util import launch_inst
 
+log = get_logger(__name__)
 CONFIG_PATH = 'config/settings.json'
 
 def get_config():
@@ -32,57 +35,69 @@ def get_instance_details(instance_id, api_key):
 
 def _provision_instance(ip_address, ssh_private_key_path, hugging_face_token):
     """Connects to the instance via SSH and provisions it."""
-    print(f"--- Provisioning instance at {ip_address} ---")
+    log.info(f"--- Provisioning instance at {ip_address} ---")
     
-    # Expand the user's home directory (e.g., '~')
     ssh_key_path = os.path.expanduser(ssh_private_key_path)
-
     if not os.path.exists(ssh_key_path):
-        raise Exception(f"SSH private key not found at the specified path: {ssh_key_path}")
+        log.error(f"SSH private key not found at {ssh_key_path}")
+        raise Exception(f"SSH private key not found at {ssh_key_path}")
 
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    for i in range(10):
-        try:
-            print(f"Connecting to {ip_address} (attempt {i+1}/10)...")
-            ssh.connect(ip_address, username='ubuntu', key_filename=ssh_key_path, timeout=20)
-            print("SSH connection successful!")
-            break
-        except Exception as e:
-            print(f"Connection failed: {e}. Retrying in 15 seconds...")
-            time.sleep(15)
-    else:
-        raise Exception("Could not establish SSH connection.")
+    try:
+        for i in range(10):
+            try:
+                log.info(f"Connecting to {ip_address} (attempt {i+1}/10)...")
+                ssh.connect(ip_address, username='ubuntu', key_filename=ssh_key_path, timeout=20)
+                log.info("SSH connection successful!")
+                break
+            except Exception as e:
+                log.warning(f"Connection attempt {i+1} failed: {e}. Retrying in 15 seconds...")
+                time.sleep(15)
+        else:
+            log.error("Could not establish SSH connection after multiple retries.")
+            raise Exception("Could not establish SSH connection.")
 
-    repo_url = "https://github.com/Metokarski/METOKARSKI_BOREAL_FLUX_DEV.git"
-    repo_name = "METOKARSKI_BOREAL_FLUX_DEV"
-    
-    # Securely inject the Hugging Face token as an environment variable
-    start_server_command = (
-        f"export HUGGING_FACE_TOKEN='{hugging_face_token}'; "
-        "nohup ~/.local/bin/uvicorn inference_server:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &"
-    )
+        repo_url = "https://github.com/Metokarski/METOKARSKI_BOREAL_FLUX_DEV.git"
+        repo_name = "METOKARSKI_BOREAL_FLUX_DEV"
+        provision_log_file = "provisioning.log"
+        server_log_file = "server.log"
 
-    commands = [
-        "sudo apt-get update",
-        "sudo apt-get install -y git python3-pip",
-        f"git clone {repo_url}",
-        f"cd {repo_name} && pip3 install -r requirements.txt",
-        f"cd {repo_name} && {start_server_command}"
-    ]
+        commands = [
+            f"echo '--- Starting Provisioning ---' > {provision_log_file}",
+            f"sudo apt-get update >> {provision_log_file} 2>&1",
+            f"sudo apt-get install -y git python3-pip >> {provision_log_file} 2>&1",
+            f"git clone {repo_url} >> {provision_log_file} 2>&1",
+            f"cd {repo_name} && pip3 install -r requirements.txt >> ../{provision_log_file} 2>&1",
+            f"cd {repo_name} && export HUGGING_FACE_TOKEN='{hugging_face_token}'; nohup /home/ubuntu/.local/bin/uvicorn inference_server:app --host 0.0.0.0 --port 8000 > {server_log_file} 2>&1 &"
+        ]
 
-    for command in commands:
-        print(f"Executing: {command}")
-        stdin, stdout, stderr = ssh.exec_command(command)
-        exit_status = stdout.channel.recv_exit_status()
-        if exit_status != 0:
-            error_message = stderr.read().decode()
-            raise Exception(f"Error executing command: {command}\n{error_message}")
-        print(stdout.read().decode())
+        for command in commands:
+            log.info(f"Executing remote command: {command}")
+            stdin, stdout, stderr = ssh.exec_command(command, get_pty=True)
+            exit_status = stdout.channel.recv_exit_status()
+            
+            stdout_str = stdout.read().decode()
+            stderr_str = stderr.read().decode()
 
-    ssh.close()
-    print("--- Provisioning complete ---")
+            if stdout_str:
+                log.debug(f"STDOUT: {stdout_str}")
+            if stderr_str:
+                log.warning(f"STDERR: {stderr_str}")
+
+            if exit_status != 0:
+                log.error(f"Command failed with exit status {exit_status}: {command}")
+                raise Exception(f"Error executing command: {command}\nSTDERR: {stderr_str}")
+            log.info(f"Command finished successfully: {command}")
+
+    except Exception as e:
+        log.error(f"An error occurred during provisioning: {e}", exc_info=True)
+        raise
+    finally:
+        ssh.close()
+        log.info("SSH connection closed.")
+    log.info("--- Provisioning complete ---")
 
 def launch_and_provision():
     """
@@ -146,13 +161,57 @@ class ManagedGPU:
     def __init__(self):
         self.instance_id = None
         self.ip_address = None
+        self.ssh_private_key_path = None
 
     def __enter__(self):
         """Called when entering the 'with' block."""
-        self.instance_id, self.ip_address = launch_and_provision()
-        return self
+        try:
+            config = get_config()
+            self.ssh_private_key_path = os.path.expanduser(config['ssh_private_key_path'])
+            self.instance_id, self.ip_address = launch_and_provision()
+            return self
+        except Exception as e:
+            log.error("Failed to enter ManagedGPU context.", exc_info=True)
+            # Ensure __exit__ is still called for cleanup
+            self.__exit__(type(e), e, e.__traceback__)
+            raise
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Called when exiting the 'with' block."""
+        if exc_type:
+            log.error(f"Exiting ManagedGPU context due to an exception: {exc_val}", exc_info=(exc_type, exc_val, exc_tb))
+
+        if self.ip_address:
+            log.info("--- Downloading logs from instance ---")
+            repo_name = "METOKARSKI_BOREAL_FLUX_DEV"
+            # Note: The log files are in the home directory, not inside the repo folder
+            logs_to_download = {"provisioning.log": "provisioning.log", "server.log": f"{repo_name}/server.log"}
+            
+            for local_name, remote_path in logs_to_download.items():
+                try:
+                    scp_command = [
+                        "scp",
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "UserKnownHostsFile=/dev/null",
+                        "-i", self.ssh_private_key_path,
+                        f"ubuntu@{self.ip_address}:{remote_path}",
+                        local_name
+                    ]
+                    log.info(f"Executing: {' '.join(scp_command)}")
+                    result = subprocess.run(scp_command, check=True, capture_output=True, text=True, timeout=60)
+                    log.info(f"Successfully downloaded {remote_path} to {local_name}")
+                    if result.stdout:
+                        log.debug(f"SCP STDOUT: {result.stdout}")
+                    if result.stderr:
+                        log.debug(f"SCP STDERR: {result.stderr}")
+                except subprocess.CalledProcessError as e:
+                    log.error(f"Failed to download {remote_path}. SCP command failed with exit code {e.returncode}.")
+                    log.error(f"SCP Stderr: {e.stderr}")
+                except FileNotFoundError:
+                    log.warning(f"Could not download {remote_path}, file not found on remote instance.")
+                except Exception as e:
+                    log.error(f"An unexpected error occurred while downloading {remote_path}: {e}", exc_info=True)
+
         if self.instance_id:
             terminate_instance(self.instance_id)
+        log.info("--- ManagedGPU context exited ---")
