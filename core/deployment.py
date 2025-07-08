@@ -61,7 +61,7 @@ def _provision_instance(ip_address, ssh_private_key_path, hugging_face_token):
     # Securely inject the Hugging Face token as an environment variable
     start_server_command = (
         f"export HUGGING_FACE_TOKEN='{hugging_face_token}'; "
-        "nohup uvicorn inference_server:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &"
+        "nohup ~/.local/bin/uvicorn inference_server:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &"
     )
 
     commands = [

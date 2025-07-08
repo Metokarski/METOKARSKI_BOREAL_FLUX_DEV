@@ -1,8 +1,8 @@
 {
-  "api_key": "YOUR_LAMBDA_API_KEY_HERE",
-  "ssh_key_name": "YOUR_SSH_KEY_NAME_HERE",
-  "ssh_private_key_path": "~/.ssh/your_key.pem",
-  "hugging_face_token": "YOUR_HUGGING_FACE_TOKEN_HERE",
+  "api_key": "REMOVED",
+  "ssh_key_name": "GLUM",
+  "ssh_private_key_path": "~/.ssh/REMOVED",
+  "hugging_face_token": "REMOVED",
   "instance_type": "gpu_1x_a10",
-  "region": "us-tx-1"
+  "region": "us-east-1"
 }
