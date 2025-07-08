@@ -1,0 +1,3 @@
+[submodule "lambdalabs_api"]
+	path = lambdalabs_api
+	url = https://github.com/erinclemmer/lambdalabs_api.git
