@@ -13,7 +13,7 @@ Make sure you have Python 3 installed on your computer.
 Open your terminal and run this command to download the project:
 ```bash
 git clone https://github.com/Metokarski/METOKARSKI_BOREAL_FLUX_DEV.git
-cd kudzueye_boreal_flux_dev
+cd METOKARSKI_BOREAL_FLUX_DEV
 ```
 
 ### 3. Install Dependencies
