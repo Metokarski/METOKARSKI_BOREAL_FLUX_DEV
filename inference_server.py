@@ -1,30 +1,61 @@
 import os
 import torch
 from diffusers import FluxPipeline
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import datetime
 import uuid
+from core.logger import get_logger
+
+# --- Logger Initialization ---
+log = get_logger(__name__)
 
 # --- FastAPI App Initialization ---
 app = FastAPI()
 
-# --- Model Loading ---
-# This section is time-consuming, so it's done once when the server starts.
-HUGGING_FACE_TOKEN = os.environ.get("HUGGING_FACE_TOKEN")
-if not HUGGING_FACE_TOKEN:
-    raise ValueError("HUGGING_FACE_TOKEN environment variable not set. The server cannot start.")
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    log.info(f"Incoming request: {request.method} {request.url}")
+    response = await call_next(request)
+    log.info(f"Response status: {response.status_code}")
+    return response
 
-pipe = FluxPipeline.from_pretrained(
-    "black-forest-labs/FLUX.1-dev",
-    torch_dtype=torch.bfloat16,
-    safety_checker=None,
-    use_auth_token=HUGGING_FACE_TOKEN
-)
-pipe.load_lora_weights("kudzueye/boreal-flux-dev-v2", weight_name="boreal-v2.safetensors")
-pipe.fuse_lora(lora_scale=1.0)
-pipe.enable_model_cpu_offload()
+# --- Model Loading ---
+try:
+    log.info("--- Starting Model Loading ---")
+    HUGGING_FACE_TOKEN = os.environ.get("HUGGING_FACE_TOKEN")
+    if not HUGGING_FACE_TOKEN:
+        log.error("HUGGING_FACE_TOKEN environment variable not set.")
+        raise ValueError("HUGGING_FACE_TOKEN environment variable not set. The server cannot start.")
+    log.info("HUGGING_FACE_TOKEN found.")
+
+    log.info("Loading FluxPipeline...")
+    pipe = FluxPipeline.from_pretrained(
+        "black-forest-labs/FLUX.1-dev",
+        torch_dtype=torch.bfloat16,
+        safety_checker=None,
+        use_auth_token=HUGGING_FACE_TOKEN
+    )
+    log.info("FluxPipeline loaded.")
+
+    log.info("Loading LoRA weights...")
+    pipe.load_lora_weights("kudzueye/boreal-flux-dev-v2", weight_name="boreal-v2.safetensors")
+    log.info("LoRA weights loaded.")
+
+    log.info("Fusing LoRA...")
+    pipe.fuse_lora(lora_scale=1.0)
+    log.info("LoRA fused.")
+
+    log.info("Enabling model CPU offload...")
+    pipe.enable_model_cpu_offload()
+    log.info("Model CPU offload enabled.")
+    log.info("--- Model Loading Complete ---")
+
+except Exception as e:
+    log.critical(f"A critical error occurred during model loading: {e}", exc_info=True)
+    # Re-raise the exception to prevent the server from starting in a bad state
+    raise
 
 # --- Image Saving Configuration ---
 SAVE_DIRECTORY = "generated_images"
@@ -53,9 +84,12 @@ async def generate_image(request: GenerationRequest):
     Generates an image based on the provided prompt and parameters.
     Returns the filename of the generated image.
     """
+    log.info(f"Received image generation request with prompt: '{request.prompt}'")
     try:
+        log.debug(f"Generation parameters: {request.dict()}")
         generator = torch.Generator(device="cpu").manual_seed(int(uuid.uuid4().int & (1<<32)-1))
         
+        log.info("Starting image generation pipeline...")
         image = pipe(
             prompt=request.prompt,
             height=request.height,
@@ -64,15 +98,20 @@ async def generate_image(request: GenerationRequest):
             guidance_scale=request.guidance_scale,
             generator=generator
         ).images[0]
+        log.info("Image generation pipeline finished.")
 
         filename = generate_filename(request.prompt)
         filepath = os.path.join(SAVE_DIRECTORY, filename)
+        
+        log.info(f"Saving image to {filepath}...")
         image.save(filepath)
+        log.info("Image saved successfully.")
 
         return {"filename": filename}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error(f"An error occurred during image generation: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An internal error occurred: {e}")
 
 @app.get("/images/{filename}")
 async def get_image(filename: str):
