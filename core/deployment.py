@@ -55,8 +55,8 @@ def _provision_instance(ip_address, ssh_private_key_path, hugging_face_token):
     else:
         raise Exception("Could not establish SSH connection.")
 
-    repo_url = "https://github.com/Metokarski/METOKARSKI_BOREAL_FLUX_DEV_V2.git"
-    repo_name = "METOKARSKI_BOREAL_FLUX_DEV_V2"
+    repo_url = "https://github.com/Metokarski/METOKARSKI_BOREAL_FLUX_DEV.git"
+    repo_name = "METOKARSKI_BOREAL_FLUX_DEV"
     
     # Securely inject the Hugging Face token as an environment variable
     start_server_command = (
